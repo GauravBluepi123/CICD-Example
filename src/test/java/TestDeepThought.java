@@ -7,7 +7,7 @@ public class TestDeepThought {
     public TestDeepThought() {
 
     }
-        @Test
+        @compile
         @DisplayName("Test the answer to everything")
         void testAnswerToAll(){
             DeepThought superComputer = new DeepThought();
