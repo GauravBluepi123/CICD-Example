@@ -1,7 +1,16 @@
-name: Deploy to Amazon ECS
+name: Deploy to AWS
 
 on:
   push:
+  
+env:
+  RELEASE_REVISION: "pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}"
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_REGION: us-east-2
+  KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA }}
+  KUBE_NAMESPACE: production
+  ECR_REPOSITORY: gitactions
   
 jobs:
   deploy:
@@ -27,24 +36,37 @@ jobs:
     - name: Login to Amazon ECR
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v1
-
-    - name: Build, tag, and push image to Amazon ECR
-      id: build-image
-      env:
-        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        ECR_REPOSITORY: gitactions
-        IMAGE_TAG: ${{ github.sha }}
+      
+    - name: Set up Docker Buildx                             
+      id: buildx                                             
+      uses: docker/setup-buildx-action@master                
+    - name: Docker cache layers                              
+      uses: actions/cache@v2                                 
+      with:                                                  
+       path: /tmp/.buildx-cache                             
+       key: ${{ runner.os }}-single-buildx-${{ github.sha }}
+       restore-keys: |                                      
+         ${{ runner.os }}-single-buildx    
+    
+    - name: Build & Push Image                                                                                      
+      env:                                                                                                          
+         ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}                                                       
+         RELEASE_IMAGE: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.RELEASE_REVISION }}
       run: |
-        # Build a docker container and
-        # push it to ECR so that it can
-        # be deployed to ECS.
-        echo "before build" 
-        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG --build-arg ACCESS_ARG=${{ secrets.AWS_ACCESS_KEY_ID }} --build-arg SECRET_ARG=${{ secrets.AWS_SECRET_ACCESS_KEY }} .
-        echo "after build"
-        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-        echo "after push"
-        echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-        echo "last"
+         docker buildx create --use
+
+         docker buildx build \                                
+            --cache-from=type=local,src=/tmp/.buildx-cache \   
+            --cache-to=type=local,dest=/tmp/.buildx-cache-new \
+            --tag ${{ env.RELEASE_IMAGE }} \                           
+            --target release \                                 
+            --push \                                           
+            .                                                  
+
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+    
     - name: deploy to cluster
       uses: kodermax/kubectl-aws-eks@master
       env:
